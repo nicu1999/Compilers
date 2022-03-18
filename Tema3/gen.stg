@@ -1,0 +1,569 @@
+////////////////////////////////////////
+// MAIN PROGRAM TEMPLATE
+////////////////////////////////////////
+/** Code for case body
+  * -> expr is the text for the expression X in 'case X ...'
+  * -> case_body_id is the id for the entire case body name.
+  * -> program_name
+  * -> instruction_line
+  * -> cases_code is a list for all of the case branches combined.
+  **/
+case_body_template(expr,
+                   case_body_id,
+                   program_name,
+                   instruction_line,
+                   cases_code) ::= <<
+    addiu   $sp $sp -4   # case locals alloc
+    move    $s0 $a0
+<expr>
+    bnez    $a0 case<case_body_id>
+    la      $a0 <program_name>
+    li      $t1 <instruction_line>
+    jal     _case_abort2
+case<case_body_id>:
+    sw      $a0 -4($fp)
+    lw      $t1 0($a0)    # class tag
+<cases_code:{x | <x>}; separator="\n">
+endcase<case_body_id>:
+    addiu   $sp $sp 4   # locals free
+>>
+
+/** Code for FIRST case branch
+  * !!!THIS IS ONLY FOR THE FIRST CASE BRANCH, BECAUSE IT HAS NO NAME.
+  * AFTERWARDS, USE case_branch_general_template FOR NON-FINAL CASE BRANCHES, OR
+  * case_branch_last_template IF IT'S THE FINAL ONE.
+  * -> next_case_branch_id is the id for the NEXT case branch label.
+  * -> case_body_id is the id FOR THE CASE BODY, NOT THE BRANCH.
+  * -> lowest_class_index,
+  * -> highest_class_index are both used for inheritance sets.
+  * -> expr
+  **/
+case_branch_first_template(next_case_branch_id,
+                           case_body_id,
+                           lowest_class_index,
+                           highest_class_index,
+                           expr) ::= <<
+    blt     $t1 <lowest_class_index> casebranch<next_case_branch_id>
+    bgt     $t1 <highest_class_index> casebranch<next_case_branch_id>
+<expr>
+    b       endcase<case_body_id>
+>>
+
+/** Code for GENERAL case branches
+  * !!!THIS IS ONLY FOR NON-FINAL CASE BRANCHES.
+  * IF THIS IS THE FINAL CASE BRANCH, USE case_branch_last_template INSTEAD.
+  * -> case_branch_id is the id for the current case branch label.
+  * -> next_case_branch_id is the id for the NEXT case branch label.
+  * -> case_body_id is the id FOR THE CASE BODY, NOT THE BRANCH.
+  * -> lowest_class_index,
+  * -> highest_class_index are both used for inheritance sets.
+  * -> expr
+  **/
+case_branch_general_template(case_branch_id,
+                     next_case_branch_id,
+                     case_body_id,
+                     lowest_class_index,
+                     highest_class_index,
+                     expr) ::= <<
+casebranch<case_branch_id>:
+    blt     $t1 <lowest_class_index> casebranch<next_case_branch_id>
+    bgt     $t1 <highest_class_index> casebranch<next_case_branch_id>
+<expr>
+    b       endcase<case_body_id>
+>>
+
+/** Code for LAST case branch (no blt & bgt)
+  * -> case_branch_name
+  * -> case_local_offset
+  * !!! NO NEED OF BRANCH BELOW, BECAUSE THE ENDCASE IS RIGHT BELOW IT.
+  * IT IS THE LAST BRANCH CASE.
+  **/
+case_branch_last_template(case_branch_id,
+                          case_local_offset) ::= <<
+casebranch<case_branch_id>:
+    lw      $a0 <case_local_offset>($fp)
+    jal     _case_abort
+>>
+
+isvoid_template(expr, tag_void) ::= <<
+<expr>
+    move	$t1 $a0
+    la		$a0 bool_const1
+    beqz	$t1 isvoid_<tag_void>
+    la		$a0 bool_const0
+isvoid_<tag_void>:
+>>
+
+if_template(cond_expr,
+            then_expr,
+            else_expr,
+            tag_id) ::= <<
+<cond_expr>
+    lw      $t1 12($a0)     # bool slot
+    beqz    $t1 else<tag_id>
+<then_expr>
+    b       endif<tag_id>
+else<tag_id>:
+<else_expr>
+endif<tag_id>:
+>>
+
+/** Code for non-SELF_TYPE new
+  * -> class_name is the class' name.
+  **/
+new_template(class_name) ::= <<
+    la      $a0 <class_name>_protObj
+    jal     Object.copy
+    jal     <class_name>_init
+>>
+
+/** Code for SELF_TYPE new
+  * -> class_name is the class' name.
+  **/
+new_template_self() ::= <<
+    la      $t1 class_objTab
+    lw      $t2 0($s0)          # class tag
+    sll     $t2 $t2 3           # *8
+    addu    $t1 $t1 $t2         # class_objTab + 8 * tag
+    sw      $t1 0($sp)
+    addiu   $sp $sp -4
+    lw      $a0 0($t1)          # _protObj
+    jal     Object.copy
+    lw      $t1 4($sp)
+    addiu   $sp $sp 4
+    lw      $t1 4($t1)          # _init
+    jalr    $t1
+>>
+
+/** Code for let body
+  * -> full_ofset is number of parameters * 4.
+  * -> params_init is a list with the parameters initial values.
+  * -> params_offset is a list with the parameters offset.
+  * -> let_body is the let body.
+  * !!! params_init and params_offset must have same length, as each element makes a tuple with
+  * the other on the same index.
+  **/
+
+let_template(full_offset,
+             params_init,
+             params_offset,
+             let_body) ::= <<
+    addiu   $sp $sp -<full_offset>   # locals alloc
+<params_init,params_offset:{x,y | <let_template_branch_template(x,y)>}; separator="\n">
+<let_body>
+    addiu   $sp $sp <full_offset>    # locals free
+>>
+
+let_template_branch_template(expr,
+                             offset) ::= <<
+<expr>
+    sw      $a0 <offset>($fp)
+>>
+
+let_acces_template(offset) ::= <<
+    lw      $a0 <offset>($fp) # Load the field
+>>
+
+
+assign_template(expr,
+                store_location) ::= <<
+<expr>
+    sw      $a0 <store_location>
+>>
+
+/** Main program template
+  *
+  * [ALREADY PRESENT]
+  * -> .globl instructions.
+  * -> _tags without the class indexes.
+  * -> Bool constant instances, for true and false (bool_const0, bool_const1)
+  * without class indexes. (One is necessary, the other is for redundancy)
+  * -> Object/IO/Int/String/Bool_dispTab exist. (Basic classes cannot lose
+  * or gain methods)
+  * -> heap_start with the common instructions exist. (It's also where the .text
+  * code section starts)
+  * -> Object/IO/Int/String/Bool_init functions exist. (They do not change)
+  *
+  * [WHAT HAS TO BE ADDED THROUGH PARAMETERS]
+  * -> int/string/bool class indexes must be added with param. int_class_index,
+  * string_class_index and bool_class_index.
+  * -> Int and string constant instances must be added with param.
+  * string_constants and int_constants.
+  * -> class_nameTab entries must be added with param. nametabs.
+  * -> class_objTab entries must be added with param. objtabs.
+  * -> Prototype objects must be added with param. protobjs.
+  * -> Dispatch tables must be added with param. disptabs.
+  * -> All init functions must be added with param. inits.
+  * -> all other functions must be added with param. functions.
+  *
+  * [WHAT >>>MUST<<< BE PRESENT IN PARAMETERS]
+  * -> Basic class indexes.
+  * -> Static int/string instances with the default values.
+  * -> class_nameTab with at least the basic class name constants put according
+  * to their class index. !Main CLASS INCLUDED HERE TOO!
+  * -> class_objTab with at least basic classes protObj and init words. (Object,
+  * IO, Int, String, Bool. There may be more classes between them, according to
+  * the inheritances) !Main CLASS INCLUDED HERE TOO!
+  * -> Other basic class protObj entries. (Int, String, Bool, whose positions
+  * in the code and class indexes can vary) !Main CLASS INCLUDED HERE TOO!
+  * -> Main_dispTab with all its functions.
+  * -> Main_init function. (May call the superclass init if it has one)
+  * -> Main.main entry point function.
+  **/
+program(int_class_index,
+        string_class_index,
+        bool_class_index,
+        string_constants,
+        int_constants,
+        nametabs,
+        objtabs,
+        protobjs,
+        disptabs,
+        inits,
+        functions) ::= <<
+    .data
+    .align  2
+    .globl  class_nameTab
+    .globl  Int_protObj
+    .globl  String_protObj
+    .globl  bool_const0
+    .globl  bool_const1
+    .globl  Main_protObj
+    .globl  _int_tag
+    .globl  _string_tag
+    .globl  _bool_tag
+
+_int_tag:
+    .word   <int_class_index>
+_string_tag:
+    .word   <string_class_index>
+_bool_tag:
+    .word   <bool_class_index>
+
+<string_constants:{x | <x>}; separator="\n">
+
+<int_constants:{x | <x>}; separator="\n">
+
+bool_const0:
+    .word   <bool_class_index>
+    .word   4
+    .word   Bool_dispTab
+    .word   0
+bool_const1:
+    .word   <bool_class_index>
+    .word   4
+    .word   Bool_dispTab
+    .word   1
+
+class_nameTab:
+<nametabs:{x | <x>}; separator="\n">
+
+class_objTab:
+<objtabs:{x | <x>}; separator="\n">
+
+<protobjs:{x | <x>}; separator="\n">
+
+<disptabs:{x | <x>}; separator="\n">
+
+    .globl  heap_start
+heap_start:
+    .word   0
+    .text
+    .globl  Int_init
+    .globl  String_init
+    .globl  Bool_init
+    .globl  Main_init
+    .globl  Main.main
+<inits:{x | <x>}; separator="\n">
+<functions:{x | <x>}; separator="\n">
+>>
+
+
+////////////////////////////////////////
+// BASIC CLASS TEMPLATES
+////////////////////////////////////////
+
+
+
+/** Constant string instance template
+  * -> id is the label id.
+  * -> string_class_index is the class index for String instances.
+  * -> size is the word size for the entire string instance. The formula for
+  * size is size = 5 + [length(text) / 4].
+  * -> int_id is the constant int instance label id.
+  * -> text is the string text. Quotes are already included. No terminators.
+  **/
+constant_string_template(id,
+                         string_class_index,
+                         size,
+                         int_id,
+                         text) ::= <<
+str_const<id>:
+    .word   <string_class_index>
+    .word   <size>
+    .word   String_dispTab
+    .word   int_const<int_id>
+    .asciiz "<text>"
+    .align  2
+>>
+
+/** Constant int instance template
+  * -> id is the label id.
+  * -> int_class_index is the class index for Int instances.
+  * -> int_value is the stored value.
+  **/
+constant_int_template(id,
+                      int_class_index,
+                      int_value) ::= <<
+int_const<id>:
+    .word   <int_class_index>
+    .word   4
+    .word   Int_dispTab
+    .word   <int_value>
+>>
+
+
+
+////////////////////////////////////////
+// OTHER TABLE ENTRY TEMPLATES
+////////////////////////////////////////
+
+
+
+/** Name table entry
+  * -> id is the constant string instance label id.
+  *
+  * !!! The entry's position in class_nameTab depends on the class index.
+  **/
+class_nametab_entry(id) ::= <<
+    .word   str_const<id>
+>>
+
+/** Object table entry
+  * -> name is the class' name.
+  *
+  * !!! The 2 entries's position in class_objTab depends on the class index.
+  **/
+class_objtab_entry(name) ::= <<
+    .word   <name>_protObj
+    .word   <name>_init
+>>
+
+
+
+////////////////////////////////////////
+// CLASS CREATION TEMPLATES
+////////////////////////////////////////
+
+
+
+/** Class prototype object body
+  * -> name is the class' name.
+  * -> class_index is the class index.
+  * -> size is class' size, in bytes.
+  * -> fields is the class' list of fields.
+  *
+  * The fields elements can have the following forms:
+  *     int_const0 for an Int field (default int value is 0)
+  *     str_const0 for a String field (default string value is "")
+  *     bool_const0 for a Bool field (default bool value is 0 - false)
+  *     0 for any other fields (default class value is null, so address is 0)
+  **/
+protobj_entry(name,
+              class_index,
+              size,
+              fields) ::= <<
+<name>_protObj:
+    .word   <class_index>
+    .word   <size>
+    .word   <name>_dispTab
+<fields:{x |     .word   <x>}; separator="\n">
+>>
+
+/** String Class prototype object body
+  * Required because of the last 2 instructions not being .words.
+  * -> class_index is the String class index.
+  **/
+string_protobj_entry(class_index) ::= <<
+String_protObj:
+    .word   <class_index>
+    .word   5
+    .word   String_dispTab
+    .word   int_const0
+    .asciiz ""
+    .align  2
+>>
+
+/** Class dispatch table
+  * -> name is the class' name.
+  * -> functions is the class' function list.
+  *
+  * Object methods are already added.
+  * !!! functions elements must follow the function naming format:
+  * Classname.methodname
+  * In addition, the parent's functions MUST BE included first.
+  **/
+disptab_entry(name,
+              functions) ::= <<
+<name>_dispTab:
+<functions:{x |     .word   <x>}; separator="\n">
+>>
+
+
+
+////////////////////////////////////////
+// FUNCTION TEMPLATES
+////////////////////////////////////////
+
+
+
+/** Generic class instance init function
+  * -> name is the class' name.
+  * -> parent_name is the class' parent name, in order to call it's init.
+  * -> attr_init_values is a list with the constant value instance names.
+  * -> attr_init_offsets is a list with the offsets for the fields.
+  * !!! Each value from the lists on a certain index form a tuple! They will
+  * go together.
+  **/
+init_class_template(name,
+                    parent_name,
+                    attr_init_values,
+                    attr_init_offsets) ::= <<
+<name>_init:
+    addiu   $sp $sp -12
+    sw      $fp 12($sp)
+    sw      $s0 8($sp)
+    sw      $ra 4($sp)
+    addiu   $fp $sp 4
+    move    $s0 $a0
+<if(parent_name)>    jal     <parent_name>_init<endif>
+<attr_init_values,attr_init_offsets:{v,o | <init_attribute_template(v, o)>}; separator="\n">
+    move    $a0 $s0
+    lw      $fp 12($sp)
+    lw      $s0 8($sp)
+    lw      $ra 4($sp)
+    addiu   $sp $sp 12
+    jr      $ra
+>>
+
+/** Generic function
+  * -> class_name is the name of the class which contains the method.
+  * -> method_name is the method's name.
+  * -> code is the method's transformed body.
+  **/
+function_template(class_name,
+                  method_name,
+                  code,
+                  full_offset) ::= <<
+<class_name>.<method_name>:
+    addiu   $sp $sp -12
+    sw      $fp 12($sp)
+    sw      $s0 8($sp)
+    sw      $ra 4($sp)
+    addiu   $fp $sp 4
+    move    $s0 $a0
+<code>
+    lw      $fp 12($sp)
+    lw      $s0 8($sp)
+    lw      $ra 4($sp)
+    addiu   $sp $sp 12
+<if(full_offset)>    addiu   $sp $sp <full_offset> # params free<endif>
+    jr      $ra
+>>
+
+
+
+
+////////////////////////////////////////
+// USABLE CODE TEMPLATES
+////////////////////////////////////////
+
+
+
+/** Dispatch execution template
+  * -> parameters_expr is a list of instructions for the parameters.
+  * -> dispatch_id is the dispatch id. Mostly used to have easy unique labels.
+  * -> program_name is the string instance label with the program's name.
+  * -> instruction_line is the line at which the dispatch happens.
+  * -> method_offset is the offset in the class' dispatch table for the
+  * dispatched function.
+  **/
+dispatch_template(parameters_expr,
+                  dispatch_expr,
+                  dispatch_id,
+                  program_name_label,
+                  instruction_line,
+                  static_class,
+                  method_offset) ::= <<
+<if(parameters_expr)><parameters_expr:{x | <x>}; separator="\n"><endif>
+<dispatch_expr>
+    bnez    $a0 dispatch<dispatch_id>
+    la      $a0 <program_name_label>
+    li      $t1 <instruction_line>
+    jal     _dispatch_abort
+dispatch<dispatch_id>:
+    <if(static_class)>la      $t1 <static_class>_dispTab<else>lw      $t1 8($a0)<endif>   # dispatch table
+    lw      $t1 <method_offset>($t1)   # method offset
+    jalr    $t1
+>>
+
+/** Code for blocks
+  * -> instructions is a list with filled instructions.
+  **/
+block_template(instructions) ::= <<
+<instructions:{x | <x>}; separator="\n">
+>>
+
+/** Code for loading self()
+  **/
+self_template() ::= <<
+    move    $a0 $s0
+>>
+
+/** Code for using a class attribute
+  * -> offset is the offset for a given field in a class.
+  **/
+class_attribute_template(offset) ::= <<
+    lw      $a0 <offset>($s0) # Load the field
+>>
+
+
+
+
+
+////////////////////////////////////////
+// INTEGRATED SUBTEMPLATES
+////////////////////////////////////////
+
+
+
+/** Code for initialized attribute (in class initialization)
+  * -> constant_value is the label name of the constant value instance.
+  * -> offset is the offset value for the field.
+  **/
+init_attribute_template(constant_value,
+                        offset) ::= <<
+<constant_value>
+    sw      $a0 <offset>($s0)
+>>
+
+/** Code for putting instance addresses in stack
+  * -> expr is the code whose result will be put in the stack
+  **/
+store_to_stack_template(expr) ::= <<
+<expr>
+    sw      $a0 0($sp)
+    addiu   $sp $sp -4
+>>
+
+/** Code for loading constant value
+  * -> constant_value is the label name of the constant value instance.
+  **/
+load_constant_value_template(constant_value) ::= <<
+    la      $a0 <constant_value>
+>>
+
+
+
+
+
